@@ -1,0 +1,7 @@
+[0m[[0m[31merror[0m] [0m[0m/Users/yuta_nakamura/Desktop/DistributedSystemsII/HWs/FinalProject/src/main/scala/main.scala:4:16: not found: value ActorSystem[0m
+[0m[[0m[31merror[0m] [0m[0m  val system = ActorSystem("MapReduceClient", ConfigFactory.load.getConfig("client"))[0m
+[0m[[0m[31merror[0m] [0m[0m               ^[0m
+[0m[[0m[31merror[0m] [0m[0m/Users/yuta_nakamura/Desktop/DistributedSystemsII/HWs/FinalProject/src/main/scala/main.scala:4:47: not found: value ConfigFactory[0m
+[0m[[0m[31merror[0m] [0m[0m  val system = ActorSystem("MapReduceClient", ConfigFactory.load.getConfig("client"))[0m
+[0m[[0m[31merror[0m] [0m[0m                                              ^[0m
+[0m[[0m[31merror[0m] [0m[0mtwo errors found[0m
