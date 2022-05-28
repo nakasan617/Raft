@@ -1,6 +1,6 @@
 lazy val root = (project in file(".")).
   settings (
-    name := "FinalProject",
+    name := "Raft",
     version := "1.0",
     scalaVersion := "2.13.8",
     ThisBuild / scalacOptions ++= Seq("-unchecked", "-deprecation"),
