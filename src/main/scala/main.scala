@@ -1,24 +1,39 @@
 
-import akka.actor.{ActorSystem, Props}
-//import com.typesafe.config.ConfigFactory
+import akka.actor.{ActorSystem, Props, PoisonPill, ActorRef}
+import scala.collection.mutable.HashSet
 
 object main extends App {
   val system = ActorSystem("Servers")
   val node1 = system.actorOf(Props(classOf[Server], "leader"))
   val node2 = system.actorOf(Props(classOf[Server], "follower"))
   val node3 = system.actorOf(Props(classOf[Server], "follower"))
-  //val mapActors = context.actorOf(RoundRobinPool(numberMappers).props(Props(classOf[MapActor], reduceActors)))
-  node1 ! AddServer(node2)
-  node1 ! AddServer(node3)
-  node2 ! AddServer(node3)
-  node2 ! AddServer(node1)
-  node3 ! AddServer(node1)
-  node3 ! AddServer(node2)
-  node3 ! Start
-  node2 ! Start
-  node1 ! Start
+  val node4 = system.actorOf(Props(classOf[Server], "follower"))
+  val node5 = system.actorOf(Props(classOf[Server], "follower"))
 
-  Thread.sleep(20000)
-  System.out.println("system terminating")
+  val nodes: HashSet[ActorRef] = new HashSet()
+  nodes += node1
+  nodes += node2
+  nodes += node3
+  nodes += node4
+  nodes += node5
+
+  node1 ! AddServers(nodes)
+  node2 ! AddServers(nodes)
+  node3 ! AddServers(nodes)
+  node4 ! AddServers(nodes)
+  node5 ! AddServers(nodes)
+
+  nodes.foreach((node: ActorRef) => node ! Start)
+
+  Thread.sleep(2000)
+  /*
+  println("poisonPill to node1")
+  node1 ! PoisonPill
+  node1 ! "message"
+  */
+  node1 ! Die
+
+  Thread.sleep(10000)
+  println("system terminating")
   system.terminate()
 }
