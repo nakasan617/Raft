@@ -8,4 +8,5 @@ lazy val root = (project in file(".")).
     libraryDependencies += "com.typesafe.akka" %% "akka-actor" % "2.6.19",
     libraryDependencies += "com.typesafe.akka" %% "akka-remote" % "2.6.19",
     libraryDependencies += "com.typesafe.akka" %% "akka-serialization-jackson" % "2.6.19"
+
   )
