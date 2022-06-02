@@ -11,6 +11,7 @@ case object HeartBeat
 case object CheckSelf
 case object Vote
 case object Die
+case object Revive
 case class AddServer(server: ActorRef)
 case class AddServers(servers: HashSet[ActorRef])
 case class VoteForMe(theirTerm: Int)
@@ -26,6 +27,7 @@ class Server(var role: String) extends Actor {
   val r = scala.util.Random
   var term: Int = 0
   var numVotes: Int = 0
+  var currTerm: Int = 0
 
   def receive = {
     case message: String => println(message)
@@ -41,6 +43,7 @@ class Server(var role: String) extends Actor {
     case FollowMe(theirTerm: Int, theirRole: String) => if(alive) followMe(theirTerm, theirRole, sender())
     case LeaderNotify(theirTerm: Int) => if(alive) leaderNotify(theirTerm: Int, sender())
     case Die => if(alive) die()
+    case Revive => if(!alive) revive()
   }
 
   /*
@@ -183,29 +186,39 @@ class Server(var role: String) extends Actor {
   }
 
   def voteReceived(ref: ActorRef): Unit = {
-    numVotes += 1
-    val half: Int = otherServers.size / 2
-    if(numVotes > half) {
-      println("leader elected, " + self.path.toString + " is the new leader at term " + term)
-    }
-    otherServers.foreach((server:ActorRef) => {
-      implicit val timeout = Timeout(3.seconds)
-      val future = ask(server, LeaderNotify).mapTo[String]
-      Await.result(future, timeout.duration)
-      if(future == null || future.value == null) {
-        println("leader notify did not work")
-        system.terminate()
-      } else if(future.value.get.get == "No Good") {
-        println("there is a problem with the term")
-        system.terminate()
-      } else if(future.value.get.get == "OK") {
-        println("OK was received")
-        // don't do anything
-      } else {
-        println("some random message received")
+    if(term > currTerm) {
+      numVotes += 1
+      val half: Int = otherServers.size / 2
+      if (numVotes > half) {
+        println("leader elected, " + self.path.toString + " is the new leader at term " + term)
+        currTerm = term
+        otherServers.foreach((server: ActorRef) => {
+//          println("sending to " + server.path.toString)
+          implicit val timeout = Timeout(1.seconds)
+          try {
+            val future = ask(server, LeaderNotify(term)).mapTo[String]
+            Await.result(future, timeout.duration)
+            if (future == null || future.value == null) {
+              println("leader notify did not work")
+              system.terminate()
+            } else if (future.value.get.get == "No Good") {
+              println("there is a problem with the term")
+              system.terminate()
+            } else if (future.value.get.get == "OK") {
+//              println("OK was received")
+
+            } else {
+              println("some random message received")
+            }
+          } catch {
+            case te: java.util.concurrent.TimeoutException => {
+              println("timeout exception caught when sending it to " + server.path.toString)
+            }
+          }
+        })
+        role = "leader"
       }
-    })
-    role = "leader"
+    }
   }
 
   def leaderNotify(theirTerm: Int, newLeader: ActorRef): Unit = {
@@ -221,5 +234,9 @@ class Server(var role: String) extends Actor {
   def die(): Unit = {
     alive = false
     cancellable.cancel()
+  }
+
+  def revive(): Unit = {
+    alive = true
   }
 }
