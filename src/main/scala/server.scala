@@ -4,6 +4,7 @@ import akka.pattern.ask
 import scala.concurrent.duration._
 import scala.concurrent.Await
 import scala.collection.mutable.HashSet
+import scala.collection.mutable.HashMap
 import akka.util.Timeout
 
 case object Start
@@ -17,8 +18,14 @@ case class AddServers(servers: HashSet[ActorRef])
 case class VoteForMe(theirTerm: Int)
 case class FollowMe(theirTerm: Int, theirRole: String)
 case class LeaderNotify(theirTerm: Int)
+case class Log(ref: ActorRef, message: String, Id: Int)
+case class LogServer(message: String)
+case class LogReplication(log: Log, theirTerm: Int)
+case class AckPrecommit(log: Log)
+case class Commit(log: Log)
 
 class Server(var role: String) extends Actor {
+  var leader: ActorRef = null
   var alive: Boolean = true
   val constantTime: Int = 500
   val otherServers: HashSet[ActorRef] = new HashSet()
@@ -28,6 +35,9 @@ class Server(var role: String) extends Actor {
   var term: Int = 0
   var numVotes: Int = 0
   var currTerm: Int = 0
+  var logs: List[Log] = List()
+  var preCommit: HashMap[Log, Int] = new HashMap()
+  var logId: Int = 0
 
   def receive = {
     case message: String => println(message)
@@ -39,11 +49,15 @@ class Server(var role: String) extends Actor {
     case AddServers(servers: HashSet[ActorRef]) => if(alive) addServers(servers)
     case VoteForMe(theirTerm: Int) => if(alive) voteForMe(theirTerm, sender())
     case CheckSelf => if(alive) sender() ! "OK"
-    case Vote => if(alive) voteReceived(sender())
-    case FollowMe(theirTerm: Int, theirRole: String) => if(alive) followMe(theirTerm, theirRole, sender())
-    case LeaderNotify(theirTerm: Int) => if(alive) leaderNotify(theirTerm: Int, sender())
+    case Vote => if(alive) voteReceived()
+    case FollowMe(theirTerm: Int, theirRole: String) => if(alive) followMe(theirTerm, theirRole)
+    case LeaderNotify(theirTerm: Int) => if(alive) leaderNotify(theirTerm: Int)
     case Die => if(alive) die()
     case Revive => if(!alive) revive()
+    case LogServer(message) => logServer(message)
+    case LogReplication(log: Log, theirTerm: Int) => logReplication(log, theirTerm)
+    case AckPrecommit(log: Log) => ackPrecommit(log)
+    case Commit(log: Log) => commit(log)
   }
 
   /*
@@ -170,7 +184,7 @@ class Server(var role: String) extends Actor {
     }
   }
 
-  def followMe(theirTerm: Int, theirRole: String, leader: ActorRef): Unit = {
+  def followMe(theirTerm: Int, theirRole: String): Unit = {
     assert(theirTerm > term)
     if(theirRole == "leader") {
       term = theirTerm
@@ -179,13 +193,13 @@ class Server(var role: String) extends Actor {
     } else if(theirRole == "candidate") {
       term = theirTerm
       role = "follower"
-      leader ! Vote
+      sender() ! Vote
     } else {
       println("we are at follow me and ")
     }
   }
 
-  def voteReceived(ref: ActorRef): Unit = {
+  def voteReceived(): Unit = {
     if(term > currTerm) {
       numVotes += 1
       val half: Int = otherServers.size / 2
@@ -200,10 +214,10 @@ class Server(var role: String) extends Actor {
             Await.result(future, timeout.duration)
             if (future == null || future.value == null) {
               println("leader notify did not work")
-              system.terminate()
+              system.terminate() // this is basically asserting
             } else if (future.value.get.get == "No Good") {
               println("there is a problem with the term")
-              system.terminate()
+              system.terminate() // this is basically asserting for now
             } else if (future.value.get.get == "OK") {
 //              println("OK was received")
 
@@ -217,26 +231,87 @@ class Server(var role: String) extends Actor {
           }
         })
         role = "leader"
+        sendHeartBeats()
       }
     }
   }
 
-  def leaderNotify(theirTerm: Int, newLeader: ActorRef): Unit = {
+  def leaderNotify(theirTerm: Int): Unit = {
     if(theirTerm >= term) {
-      newLeader ! "OK"
+      sender() ! "OK"
       term = theirTerm
       role = "follower"
+      leader = sender()
     } else {
-      newLeader ! "No Good"
+      sender() ! "No Good"
     }
   }
 
   def die(): Unit = {
     alive = false
     cancellable.cancel()
+    cancellable = null
   }
 
   def revive(): Unit = {
     alive = true
+  }
+
+  /*
+  This method is what logging of what leader does.
+  if you are not the leader, forward the message to the leader
+  if you are the leader, add the entry and send the log to the followers, when you get the message back from the majority, commit
+   */
+  def logServer(message: String) = {
+    if(role != "leader") {
+      if(leader != null) {
+        leader ! LogServer(message)
+      } else {
+        println("leader does not exist, aborting the message: " + message)
+      }
+    } else {
+      // add the entry
+      val log = Log(self, message, logId)
+      preCommit(log) = 0
+      logs = log::logs
+      logId = logId + 1
+      otherServers.foreach((server: ActorRef) => server ! LogReplication(log, term))
+    }
+  }
+
+  /*
+  This method is used when the follower receives the precommit message as well as its logs
+  The term has to be the same to do the replication and if the term is not right, it is ignored
+   */
+  def logReplication(log: Log, theirTerm: Int): Unit = {
+    if(theirTerm == term) {
+      preCommit(log) = 0
+      sender() ! AckPrecommit
+    } else {
+      // just ignore in this case
+    }
+  }
+
+  /*
+  This method is used by the leader when the follower sends the acknowledgement for the precommit
+  You will store the number of acknowledge in the HashMap, and when it is over half, it is removed from the hashmap, added to the log,
+  and sends messages to the followers to commit as well
+   */
+  def ackPrecommit(log: Log): Unit = {
+    assert(role == "leader")
+    preCommit(log) += 1
+    if((otherServers.size + 1)/2  < preCommit(log) && preCommit(log) <= (otherServers.size + 1)/2 + 1) {
+      preCommit -= (log)
+      otherServers.foreach((server: ActorRef) => server ! Commit(log))
+    }
+  }
+
+  def commit(log: Log) = {
+    assert(role == "follower")
+    if(preCommit.contains(log)) {
+      logs = log::logs
+    } else {
+      println("commit message for log that is not in precommit: " + log.message + ", " + log.ref.path.toString + ", " + log.Id)
+    }
   }
 }

@@ -3,8 +3,8 @@ import akka.actor.{ActorSystem, Props, PoisonPill, ActorRef}
 import scala.collection.mutable.HashSet
 
 object main extends App {
-  val system = ActorSystem("Servers")
-  val node1 = system.actorOf(Props(classOf[Server], "leader"))
+  val system = ActorSystem("Raft")
+  val node1 = system.actorOf(Props(classOf[Server], "follower"))
   val node2 = system.actorOf(Props(classOf[Server], "follower"))
   val node3 = system.actorOf(Props(classOf[Server], "follower"))
   val node4 = system.actorOf(Props(classOf[Server], "follower"))
@@ -17,12 +17,7 @@ object main extends App {
   nodes += node4
   nodes += node5
 
-  node1 ! AddServers(nodes)
-  node2 ! AddServers(nodes)
-  node3 ! AddServers(nodes)
-  node4 ! AddServers(nodes)
-  node5 ! AddServers(nodes)
-
+  nodes.foreach((node: ActorRef) => node ! AddServers(nodes))
   nodes.foreach((node: ActorRef) => node ! Start)
 
   Thread.sleep(2000)
