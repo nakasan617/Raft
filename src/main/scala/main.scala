@@ -20,7 +20,18 @@ object main extends App {
   nodes.foreach((node: ActorRef) => node ! AddServers(nodes))
   nodes.foreach((node: ActorRef) => node ! Start)
 
-  Thread.sleep(2000)
+  Thread.sleep(3000)
+  val client = system.actorOf(Props(classOf[Client], nodes))
+  client ! LogClient("Chicago is cold", node1)
+  client ! LogClient("I want money", node2)
+  client ! LogClient("hello world", node3)
+  client ! LogClient("I want time", node4)
+  client ! LogClient("Life is good", node5)
+
+  Thread.sleep(5000)
+  client ! AskLog(node2)
+  client ! AskLog(node3)
+  client ! AskLog(node1)
   /*
   println("poisonPill to node1")
   node1 ! PoisonPill
@@ -28,7 +39,18 @@ object main extends App {
   */
   node1 ! Die
 
-  Thread.sleep(10000)
+  client ! LogClient("I hope", node5)
+  client ! LogClient("This final project", node3)
+  client ! LogClient("Is good", node1)
+  client ! LogClient("hello world", node4)
+
+  client ! AskLog(node3)
+  Thread.sleep(1000)
+  client ! LogClient("Is good", node2)
+  client ! AskLog(node4)
+  client ! AskLog(node3)
+
+  Thread.sleep(5000)
   println("system terminating")
   system.terminate()
 }
