@@ -17,6 +17,7 @@ case object Die
 case object Revive
 case object ShowLog
 case object GoLeft
+case object AskLeader
 case class HeartBeat(theirTerm: Int)
 case class AddServer(server: ActorRef)
 case class AddServers(servers: HashSet[ActorRef])
@@ -30,8 +31,11 @@ case class AckPrecommit(log: Log)
 case class Commit(log: Log)
 case class CatchUpLeft(log: Log, theirIndex: Int)
 case class CatchUpRight()
+case class CatchUpReply(log: Log, Index: Int, message: String)
+/*
 case class CatchUpIndex(theirIndex: Int)
 case class GoRight(log: Log)
+ */
 
 class Server(var role: String) extends Actor {
   var leader: ActorRef = null
@@ -44,7 +48,7 @@ class Server(var role: String) extends Actor {
   var term: Int = 0
   var numVotes: Int = 0
   var currTerm: Int = 0
-  var logs: List[Log] = List()
+  var logs: Array[Log] = Array()
   var preCommit: HashMap[Log, Int] = new HashMap()
   var logId: Int = 0
   var index: Int = -1
@@ -71,6 +75,7 @@ class Server(var role: String) extends Actor {
     case ShowLog => if(alive) sender() ! logs
     case CatchUpLeft(log: Log, theirIndex: Int) => if(alive) catchUpLeft(log, theirIndex)
     case CatchUpRight() => if(alive) catchUpRight()
+    case AskLeader => if(alive) askLeader()
   }
 
   /*
@@ -133,22 +138,57 @@ class Server(var role: String) extends Actor {
 
       implicit val timeout = Timeout(1.seconds)
 
+      print("we are follower here: ")
+      for(x <- logs) {
+        print(x)
+        print(", ")
+      }
+      println()
+
       while(!caughtUp) {
+        var future:Future[CatchUpReply] = null
         try {
-          var future:Future[Option[Any]] = null
           if(left) {
-            future = ask(sender(), CatchUpLeft(logs(currIndex), currIndex)).mapTo[Option[Any]]
+            future = ask(sender(), CatchUpLeft(logs(currIndex), currIndex)).mapTo[CatchUpReply]
           } else {
-            future = ask(sender(), CatchUpRight()).mapTo[Option[Any]]
+            future = ask(sender(), CatchUpRight()).mapTo[CatchUpReply]
           }
           Await.result(future, timeout.duration)
-          println(future)
-          caughtUp = true
+//          println(future)
         } catch {
           case e: TimeoutException => {
             term = oldTerm
+            println("timed out exception, we need to redo this")
             caughtUp = true // break from the loop and hope for the next opportunity
           }
+        }
+        val reply: CatchUpReply = future.value.get.get
+        if(reply.message == "Index") {
+          println("index has to be aligned, now it is " + reply.Index)
+          currIndex = reply.Index
+        } else if(reply.message == "Left") {
+          println("the reply said keep going left, currently it is at: " + reply.Index + "," + logs(reply.Index))
+          currIndex = reply.Index - 1
+        } else if(reply.message == "Right") {
+          if(reply.Index < logs.size) {
+            println("the reply now says you can start going right, currIndex: " + reply.Index + ", logs(currIndex): " + logs(reply.Index))
+            logs(reply.Index) = reply.log
+          } else if(reply.Index == logs.size) {
+            println("the reply now says you can start going right, currIndex: " + reply.Index)
+            logs = logs :+ reply.log
+          } else {
+            println("this was not expected. terminating")
+            system.terminate()
+          }
+          currIndex = reply.Index
+          left = false
+        } else if(reply.message == "Done") {
+          caughtUp = true
+        } else {
+          println("we need to redo this")
+          println(reply.message)
+          caughtUp = true
+          term = oldTerm // you need to redo the catching up again
         }
       }
     } else {
@@ -294,12 +334,14 @@ class Server(var role: String) extends Actor {
   }
 
   def die(): Unit = {
+    println(self.path.toString + " dies. Bye.")
     alive = false
     cancellable.cancel()
     cancellable = null
   }
 
   def revive(): Unit = {
+    println("revive")
     alive = true
   }
 
@@ -311,7 +353,7 @@ class Server(var role: String) extends Actor {
   def logServer(message: String) = {
     if(role != "leader") {
       if(leader != null) {
-        println("forwarding the message to " + leader.path.toString)
+//        println("forwarding the message to " + leader.path.toString)
         leader ! LogServer(message)
       } else {
         println("leader does not exist, aborting the message: " + message)
@@ -321,7 +363,7 @@ class Server(var role: String) extends Actor {
 //      println("now at logServer in leader")
       val log = Log(self, message, logId)
       preCommit(log) = 0
-      logs = log::logs
+      logs = logs :+ log
       logId = logId + 1
       otherServers.foreach((server: ActorRef) => server ! LogReplication(log, term))
 //      println("now precommit: " + preCommit + " in " +  self.path.toString)
@@ -333,7 +375,9 @@ class Server(var role: String) extends Actor {
   The term has to be the same to do the replication and if the term is not right, it is ignored
    */
   def logReplication(log: Log, theirTerm: Int): Unit = {
-    assert(role == "follower")
+    if(role != "follower") {
+      println("role: " + role + ", " + self.path.toString + ", theirTerm: " + theirTerm + ", myTerm: " + term)
+    }
     if(theirTerm == term) {
       preCommit(log) = 0
 //      println("now precommit: " + preCommit + " in " + self.path.toString)
@@ -363,9 +407,8 @@ class Server(var role: String) extends Actor {
   }
 
   def commit(log: Log) = {
-    assert(role == "follower")
-    if(preCommit.contains(log)) {
-      logs = log::logs
+    if(preCommit.contains(log) && role == "follower") {
+      logs = logs :+ log
     } else {
 //      println("commit message for log that is not in precommit: " + log.message + ", " + log.ref.path.toString + ", " + log.Id)
     }
@@ -373,37 +416,65 @@ class Server(var role: String) extends Actor {
 
   def catchUpLeft(log: Log, theirIndex: Int): Unit = {
     assert(role == "leader")
-    if(index == null) {
+    if(index == -1) {
       index = logs.size - 1
     }
 
+    print("we are leader here, logs: ")
+    for(x <- logs) {
+      print(x)
+      print(", ")
+    }
+    println()
+
     if(index < theirIndex) {
-      sender() ! CatchUpIndex(index)
+      println("the index needs to be aligned, myIndex: " + index + " theirIndex: " + theirIndex)
+      sender() ! CatchUpReply(null, index, "Index")
     } else if(theirIndex < index) {
+      println("the index needs to be aligned, but I am ahead, so I can go back to theirIndex: " + theirIndex)
       index = theirIndex
       if(logs(index) == log) {
-        sender() ! GoRight(null)
+        println("the log was the same, you can start going right now: " + index)
+        sender() ! CatchUpReply(logs(index + 1), index + 1, "Right")
       } else {
+        println("the log was not the same")
         if(index == 0) {
-          sender() ! GoRight(logs(index))
+          println("but now we are at 0, so let's start going right now")
+          sender() ! CatchUpReply(logs(index), index, "Right")
         } else {
-          sender() ! GoLeft
+          println("its not the same, so we should keep going left, index: " + index)
+          sender() ! CatchUpReply(null, index - 1, "Left")
           index -= 1
         }
       }
     } else { // theirIndex == index
+      println("the index is already aligned")
       if(logs(index) == log) {
-        sender() ! GoRight(null)
+        println("the log is the same, let's start going right now: " + index)
+        sender() ! CatchUpReply(logs(index + 1), index + 1, "Right")
         index += 1
       } else {
-        sender() ! GoLeft
+        println("the log is not the same, let's keep going left, index: " + index)
+        sender() ! CatchUpReply(null, index - 1, "Left")
         index -= 1
       }
     }
   }
 
   def catchUpRight(): Unit = {
-    sender() ! GoRight(logs(index))
-    index += 1
+    if(index < logs.size) {
+      println("we will keep giving out the logs as well as index, index: " + index + ", logs(index): " + logs(index))
+      sender() ! CatchUpReply(logs(index), index, "Right")
+      index += 1
+    } else {
+      println("we should be done catching up now")
+      sender() ! CatchUpReply(null, index, "Done")
+      index = -1
+    }
+
+  }
+
+  def askLeader()= {
+    sender() ! leader
   }
 }

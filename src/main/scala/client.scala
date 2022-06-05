@@ -25,9 +25,14 @@ class Client(var servers: HashSet[ActorRef]) extends Actor {
   def showLog(server: ActorRef) = {
     try {
       implicit val timeout = Timeout(2.seconds)
-      val future = ask(server, ShowLog).mapTo[List[Log]]
+      val future = ask(server, ShowLog).mapTo[Array[Log]]
       Await.result(future, timeout.duration)
       println(future.value.get.get)
+      val ar = future.value.get.get
+      for(x <- ar) {
+        print(x + ", ")
+      }
+      println()
     } catch {
       case e: java.util.concurrent.TimeoutException => {
         println("timed out getting the log from " + server.path.toString)
