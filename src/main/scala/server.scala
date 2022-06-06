@@ -1,4 +1,4 @@
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorRef, Cancellable}
 import akka.pattern.ask
 
 import scala.concurrent.duration._
@@ -104,8 +104,10 @@ class Server(var role: String) extends Actor {
   }
 
   /*
-  this is what we do when we receive the heart beat,
+  This is what we do when we receive the heart beat,
   we cancel the scheduled election and start a new schedule
+  Whenever it receives the HeartBeat and notices that the node is late,
+  it will do the catching up with latest logs with the current leader
    */
   def receiveHeartBeat(theirTerm: Int) = {
     if (term == theirTerm) {
@@ -268,6 +270,10 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This methods is called when a vote is received form a follower, and when one gets the number of vote that is more than half the number of servers,
+  it should notify all the followers that it became the leader and starts sending HeartBeats
+   */
   def voteReceived(): Unit = {
     if(term > currTerm) {
       numVotes += 1
@@ -305,6 +311,10 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This method is used when they know the new leader and the leader notifies the followers
+  The new leader informs the followers to update their terms
+   */
   def leaderNotify(theirTerm: Int, newLeader: ActorRef): Unit = {
     if(theirTerm >= term) {
       sender() ! "OK"
@@ -316,6 +326,9 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This method kills the actor, and cancels any scheduled procedures
+   */
   def die(): Unit = {
     println(self.path.toString + " dies. Bye.")
     alive = false
@@ -323,8 +336,11 @@ class Server(var role: String) extends Actor {
     cancellable = null
   }
 
+  /*
+  This method revives the actor
+   */
   def revive(): Unit = {
-    println("revive")
+    println(self.path.toString + " revived")
     alive = true
   }
 
@@ -385,6 +401,9 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This method commits the message to the followers, I should check the term here
+   */
   def commit(log: Log) = {
     if(preCommit.contains(log) && role == "follower") {
       logs = logs :+ log
@@ -393,6 +412,11 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This method is used when the former node revives and want to catch up with the current logs BY the leader
+  It first tries to see till where the logs are valid comparing with the current leader
+  When it finds the latest point where the logs do NOT need to be updated, it hands over the procedure to catchUpRight
+   */
   def catchUpLeft(log: Log, theirIndex: Int): Unit = {
     assert(role == "leader")
     if(index == -1) {
@@ -447,6 +471,10 @@ class Server(var role: String) extends Actor {
     }
   }
 
+  /*
+  This method is used by leader, when the leader and the late follower knows where the latest point which follower does not need to update,
+  the current leader will keep on giving out a log at a time to the late follower
+   */
   def catchUpRight(): Unit = {
     if(index < logs.size) {
       //println("we will keep giving out the logs as well as index, index: " + index + ", logs(index): " + logs(index))

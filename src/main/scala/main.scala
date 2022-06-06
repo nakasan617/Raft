@@ -7,6 +7,9 @@ import scala.concurrent.duration._
 import scala.concurrent.Await
 import akka.pattern.ask
 
+/*
+This is a test that combines leader election, log committing, and log replication
+ */
 object MainTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
@@ -77,6 +80,12 @@ object MainTest extends App {
   system.terminate()
 }
 
+/*
+This is a test to see if it can create a new leader when it becomes absent.
+It first creates 5 nodes and then start, which would start the leader election.
+Then it kills the leader and let's another voting start again.
+The leader that is different from the former should newly be elected.
+ */
 object LeaderElectionTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
@@ -119,6 +128,9 @@ object LeaderElectionTest extends App {
   system.terminate()
 }
 
+/*
+This is a test that creates some logs for servers and see if they have the same logs
+ */
 object LogCommitTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
@@ -156,6 +168,10 @@ object LogCommitTest extends App {
   system.terminate()
 }
 
+/*
+This is a test that creates the logs first, kills the leader, creates more logs, and revives the leader.
+It checks whether the former leader's log is consistent with others' logs
+ */
 object ReviveTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
