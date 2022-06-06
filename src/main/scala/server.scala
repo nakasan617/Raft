@@ -22,7 +22,6 @@ case class HeartBeat(theirTerm: Int)
 case class AddServer(server: ActorRef)
 case class AddServers(servers: HashSet[ActorRef])
 case class VoteForMe(theirTerm: Int)
-case class FollowMe(theirTerm: Int, theirRole: String)
 case class LeaderNotify(theirTerm: Int, newLeader: ActorRef)
 case class Log(ref: ActorRef, message: String, Id: Int)
 case class LogServer(message: String)
@@ -32,10 +31,6 @@ case class Commit(log: Log)
 case class CatchUpLeft(log: Log, theirIndex: Int)
 case class CatchUpRight()
 case class CatchUpReply(log: Log, Index: Int, message: String)
-/*
-case class CatchUpIndex(theirIndex: Int)
-case class GoRight(log: Log)
- */
 
 class Server(var role: String) extends Actor {
   var leader: ActorRef = null
@@ -64,7 +59,6 @@ class Server(var role: String) extends Actor {
     case VoteForMe(theirTerm: Int) => if(alive) voteForMe(theirTerm, sender())
     case CheckSelf => if(alive) sender() ! "OK"
     case Vote => if(alive) voteReceived()
-    case FollowMe(theirTerm: Int, theirRole: String) => if(alive) followMe(theirTerm, theirRole)
     case LeaderNotify(theirTerm: Int, newLeader: ActorRef) => if(alive) leaderNotify(theirTerm: Int, newLeader)
     case Die => if(alive) die()
     case Revive => if(!alive) revive()
@@ -119,7 +113,7 @@ class Server(var role: String) extends Actor {
         //      println("cancelled at :" + self.path.toString)
         cancellable.cancel()
       } else {
-        println("cancellable was null")
+        //println("cancellable was null")
       }
       val time = r.nextInt(300) + constantTime
       implicit val ec = system.dispatcher
@@ -138,12 +132,14 @@ class Server(var role: String) extends Actor {
 
       implicit val timeout = Timeout(1.seconds)
 
+      /*
       print("we are follower here: ")
       for(x <- logs) {
         print(x)
         print(", ")
       }
       println()
+       */
 
       while(!caughtUp) {
         var future:Future[CatchUpReply] = null
@@ -164,20 +160,20 @@ class Server(var role: String) extends Actor {
         }
         val reply: CatchUpReply = future.value.get.get
         if(reply.message == "Index") {
-          println("index has to be aligned, now it is " + reply.Index)
+          //println("index has to be aligned, now it is " + reply.Index)
           currIndex = reply.Index
         } else if(reply.message == "Left") {
-          println("the reply said keep going left, currently it is at: " + reply.Index + "," + logs(reply.Index))
+          //println("the reply said keep going left, currently it is at: " + reply.Index + "," + logs(reply.Index))
           currIndex = reply.Index - 1
         } else if(reply.message == "Right") {
           if(reply.Index < logs.size) {
-            println("the reply now says you can start going right, currIndex: " + reply.Index + ", logs(currIndex): " + logs(reply.Index))
+            //println("the reply now says you can start going right, currIndex: " + reply.Index + ", logs(currIndex): " + logs(reply.Index))
             logs(reply.Index) = reply.log
           } else if(reply.Index == logs.size) {
-            println("the reply now says you can start going right, currIndex: " + reply.Index)
+            //println("the reply now says you can start going right, currIndex: " + reply.Index)
             logs = logs :+ reply.log
           } else {
-            println("this was not expected. terminating")
+            //println("this was not expected. terminating")
             system.terminate()
           }
           currIndex = reply.Index
@@ -223,6 +219,10 @@ class Server(var role: String) extends Actor {
     otherServers.foreach((server: ActorRef) => server ! VoteForMe(term))
   }
 
+  /*
+  This method is a response of the FOLLOWER (NOT leader) to either vote for the guy, or not vote for the guy
+  if the follower is voting there must be a line candidate ! Vote
+   */
   def voteForMe(theirTerm: Int, candidate: ActorRef) = {
     if(role == "follower") {
       if(theirTerm > term) {
@@ -236,7 +236,7 @@ class Server(var role: String) extends Actor {
         // you already voted for someone
       } else {
         // term > theirTerm
-        // I will leave this part out yet
+        // you should not vote in this case
       }
     } else if (role == "leader") {
       if(theirTerm > term) {
@@ -245,41 +245,26 @@ class Server(var role: String) extends Actor {
           cancellable.cancel()
         }
         candidate ! Vote
+        term = theirTerm
       } else if(theirTerm < term) {
-        candidate ! FollowMe(term, role)
+        // this guy will eventually give out the heartBeat to check the term
       } else {
         println("The term is the same and you guys are candidate and leader, this can't be happening")
       }
     } else {
       assert(role == "candidate")
       if(theirTerm == term) {
-        // don't do anything
+        // don't do anything, don't vote
       } else if (theirTerm > term) {
         // I need to follow them
         role = "follower"
         term = theirTerm
-//        println("term changed at " + self.path.toString() + " at vote for me")
         candidate ! Vote
       } else {
         // they need to follow me
         assert(theirTerm < term)
-        candidate ! FollowMe(term, role)
+        // you don't need to do anything here
       }
-    }
-  }
-
-  def followMe(theirTerm: Int, theirRole: String): Unit = {
-    assert(theirTerm > term)
-    if(theirRole == "leader") {
-      term = theirTerm
-      role = "follower"
-      receiveHeartBeat(term)
-    } else if(theirRole == "candidate") {
-      term = theirTerm
-      role = "follower"
-      sender() ! Vote
-    } else {
-      println("we are at follow me and ")
     }
   }
 
@@ -291,7 +276,6 @@ class Server(var role: String) extends Actor {
         println("leader elected, " + self.path.toString + " is the new leader at term " + term)
         currTerm = term
         otherServers.foreach((server: ActorRef) => {
-//          println("sending to " + server.path.toString)
           implicit val timeout = Timeout(1.seconds)
           try {
             val future = ask(server, LeaderNotify(term, self)).mapTo[String]
@@ -323,7 +307,6 @@ class Server(var role: String) extends Actor {
 
   def leaderNotify(theirTerm: Int, newLeader: ActorRef): Unit = {
     if(theirTerm >= term) {
-//      println(newLeader.path.toString + " vs. " + sender().path.toString)
       sender() ! "OK"
       term = theirTerm
       role = "follower"
@@ -353,20 +336,17 @@ class Server(var role: String) extends Actor {
   def logServer(message: String) = {
     if(role != "leader") {
       if(leader != null) {
-//        println("forwarding the message to " + leader.path.toString)
         leader ! LogServer(message)
       } else {
         println("leader does not exist, aborting the message: " + message)
       }
     } else {
       // add the entry
-//      println("now at logServer in leader")
       val log = Log(self, message, logId)
       preCommit(log) = 0
       logs = logs :+ log
       logId = logId + 1
       otherServers.foreach((server: ActorRef) => server ! LogReplication(log, term))
-//      println("now precommit: " + preCommit + " in " +  self.path.toString)
     }
   }
 
@@ -376,15 +356,14 @@ class Server(var role: String) extends Actor {
    */
   def logReplication(log: Log, theirTerm: Int): Unit = {
     if(role != "follower") {
-      println("role: " + role + ", " + self.path.toString + ", theirTerm: " + theirTerm + ", myTerm: " + term)
-    }
-    if(theirTerm == term) {
-      preCommit(log) = 0
-//      println("now precommit: " + preCommit + " in " + self.path.toString)
-//      println("precommit message sent, now returning acknowledgement to " + sender().path.toString + " from " + self.path.toString)
-      sender() ! AckPrecommit(log)
+      //println("role: " + role + ", " + self.path.toString + ", theirTerm: " + theirTerm + ", myTerm: " + term)
     } else {
-      // just ignore in this case
+      if (theirTerm == term) {
+        preCommit(log) = 0
+        sender() ! AckPrecommit(log)
+      } else {
+        // just ignore in this case
+      }
     }
   }
 
@@ -420,41 +399,48 @@ class Server(var role: String) extends Actor {
       index = logs.size - 1
     }
 
+    /*
     print("we are leader here, logs: ")
     for(x <- logs) {
       print(x)
       print(", ")
     }
     println()
+     */
 
     if(index < theirIndex) {
-      println("the index needs to be aligned, myIndex: " + index + " theirIndex: " + theirIndex)
+      //println("the index needs to be aligned, myIndex: " + index + " theirIndex: " + theirIndex)
       sender() ! CatchUpReply(null, index, "Index")
     } else if(theirIndex < index) {
-      println("the index needs to be aligned, but I am ahead, so I can go back to theirIndex: " + theirIndex)
+      //println("the index needs to be aligned, but I am ahead, so I can go back to theirIndex: " + theirIndex)
       index = theirIndex
       if(logs(index) == log) {
-        println("the log was the same, you can start going right now: " + index)
+        //println("the log was the same, you can start going right now: " + index)
         sender() ! CatchUpReply(logs(index + 1), index + 1, "Right")
       } else {
-        println("the log was not the same")
+        //println("the log was not the same")
         if(index == 0) {
-          println("but now we are at 0, so let's start going right now")
+          //println("but now we are at 0, so let's start going right now")
           sender() ! CatchUpReply(logs(index), index, "Right")
         } else {
-          println("its not the same, so we should keep going left, index: " + index)
+          //println("its not the same, so we should keep going left, index: " + index)
           sender() ! CatchUpReply(null, index - 1, "Left")
           index -= 1
         }
       }
     } else { // theirIndex == index
-      println("the index is already aligned")
+      //println("the index is already aligned")
       if(logs(index) == log) {
-        println("the log is the same, let's start going right now: " + index)
-        sender() ! CatchUpReply(logs(index + 1), index + 1, "Right")
-        index += 1
+        //println("the log is the same, let's start going right now: " + index)
+        if(index + 1 < logs.size) {
+          sender() ! CatchUpReply(logs(index + 1), index + 1, "Right")
+          index += 1
+        } else {
+          // this is already done
+          sender() ! CatchUpReply(null, index, "Done")
+        }
       } else {
-        println("the log is not the same, let's keep going left, index: " + index)
+        //println("the log is not the same, let's keep going left, index: " + index)
         sender() ! CatchUpReply(null, index - 1, "Left")
         index -= 1
       }
@@ -463,11 +449,11 @@ class Server(var role: String) extends Actor {
 
   def catchUpRight(): Unit = {
     if(index < logs.size) {
-      println("we will keep giving out the logs as well as index, index: " + index + ", logs(index): " + logs(index))
+      //println("we will keep giving out the logs as well as index, index: " + index + ", logs(index): " + logs(index))
       sender() ! CatchUpReply(logs(index), index, "Right")
       index += 1
     } else {
-      println("we should be done catching up now")
+      //println("we should be done catching up now")
       sender() ! CatchUpReply(null, index, "Done")
       index = -1
     }
@@ -476,5 +462,13 @@ class Server(var role: String) extends Actor {
 
   def askLeader()= {
     sender() ! leader
+  }
+
+  private def printLogs(): Unit = {
+    for(x <- logs) {
+      print(x)
+      print(", ")
+    }
+    println()
   }
 }
