@@ -218,6 +218,25 @@ class Server(var role: String) extends Actor {
     println("did not receive the heartBeat, starting leader election: " + self.path.toString + ", now at term " + term)
     role = "candidate"
     numVotes = 1
+
+    val time = r.nextInt(400) + 4000
+    implicit val ec = system.dispatcher
+    cancellable = system.scheduler.scheduleOnce(time.millis) {
+      implicit val timeout = Timeout(5.seconds)
+      restartElection()
+    }
+
+    otherServers.foreach((server: ActorRef) => server ! VoteForMe(term))
+  }
+
+  private def restartElection(): Unit = {
+    println("could not elect the leader, will restart: " + self.path.toString + " at term " + term)
+    val time = r.nextInt(400) + 4000
+    implicit val ec = system.dispatcher
+    cancellable = system.scheduler.scheduleOnce(time.millis) {
+      implicit val timeout = Timeout(5.seconds)
+      restartElection()
+    }
     otherServers.foreach((server: ActorRef) => server ! VoteForMe(term))
   }
 
@@ -279,6 +298,9 @@ class Server(var role: String) extends Actor {
       numVotes += 1
       val half: Int = otherServers.size / 2
       if (numVotes > half) {
+        if(cancellable != null) {
+          cancellable.cancel()
+        }
         println("leader elected, " + self.path.toString + " is the new leader at term " + term)
         currTerm = term
         otherServers.foreach((server: ActorRef) => {

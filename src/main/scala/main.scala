@@ -237,3 +237,56 @@ object ReviveTest extends App {
   Thread.sleep(5000)
   system.terminate()
 }
+
+/*
+This is a test to see if the candidate will keep on holding the election if the more than half the nodes are dead.
+ */
+object RecurringLeaderElection extends App {
+  val system = ActorSystem("Raft")
+  val node1 = system.actorOf(Props(classOf[Server], "follower"))
+  val node2 = system.actorOf(Props(classOf[Server], "follower"))
+  val node3 = system.actorOf(Props(classOf[Server], "follower"))
+  val node4 = system.actorOf(Props(classOf[Server], "follower"))
+  val node5 = system.actorOf(Props(classOf[Server], "follower"))
+
+  val nodes: HashSet[ActorRef] = new HashSet()
+  nodes += node1
+  nodes += node2
+  nodes += node3
+  nodes += node4
+  nodes += node5
+
+  nodes.foreach((node: ActorRef) => node ! AddServers(nodes))
+  nodes.foreach((node: ActorRef) => node ! Start)
+
+  Thread.sleep(1000)
+  println("Finding the leader of this term")
+  var leader: ActorRef = node1
+  try {
+    implicit val timeout = Timeout(1.seconds)
+    val future = ask(node1, AskLeader).mapTo[ActorRef]
+    Await.result(future, timeout.duration)
+    leader = future.value.get.get
+  } catch {
+    case e: java.util.concurrent.TimeoutException => {
+      println("timed out getting the log from " + leader.path.toString)
+      Thread.sleep(2000)
+      system.terminate()
+    }
+  }
+  println("leader: " + leader.path.toString + " I am killing this guy for a moment")
+  Thread.sleep(1000)
+  var leaderDied: Boolean = false
+  if(node1 == leader || node2 == leader) {
+    leaderDied = true
+  }
+  node1 ! Die
+  node2 ! Die
+  if(leaderDied == true) {
+    node3 ! Die
+  }
+  Thread.sleep(10000)
+  println("Did it elect the new leader?")
+  println("system terminating")
+  system.terminate()
+}
