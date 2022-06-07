@@ -31,6 +31,7 @@ case class Commit(log: Log)
 case class CatchUpLeft(log: Log, theirIndex: Int)
 case class CatchUpRight()
 case class CatchUpReply(log: Log, Index: Int, message: String)
+case class Partition(part: HashSet[ActorRef])
 
 class Server(var role: String) extends Actor {
   var leader: ActorRef = null
@@ -41,6 +42,7 @@ class Server(var role: String) extends Actor {
   val system = context.system
   val r = scala.util.Random
   var term: Int = 0
+  var reelectionIndex: Int = 0
   var numVotes: Int = 0
   var currTerm: Int = 0
   var logs: Array[Log] = Array()
@@ -70,6 +72,7 @@ class Server(var role: String) extends Actor {
     case CatchUpLeft(log: Log, theirIndex: Int) => if(alive) catchUpLeft(log, theirIndex)
     case CatchUpRight() => if(alive) catchUpRight()
     case AskLeader => if(alive) askLeader()
+    case Partition(part: HashSet[ActorRef]) => if(alive) partition(part)
   }
 
   /*
@@ -214,7 +217,8 @@ class Server(var role: String) extends Actor {
   numVotes starts out as one because you vote for yourself
    */
   def startElection() = {
-    term += 1
+    //term += 1
+    reelectionIndex += 1
     println("did not receive the heartBeat, starting leader election: " + self.path.toString + ", now at term " + term)
     role = "candidate"
     numVotes = 1
@@ -230,6 +234,7 @@ class Server(var role: String) extends Actor {
   }
 
   private def restartElection(): Unit = {
+    reelectionIndex += 1
     println("could not elect the leader, will restart: " + self.path.toString + " at term " + term)
     val time = r.nextInt(400) + 4000
     implicit val ec = system.dispatcher
@@ -520,5 +525,14 @@ class Server(var role: String) extends Actor {
       print(", ")
     }
     println()
+  }
+
+  def partition(part: HashSet[ActorRef]): Unit = {
+    if(part.contains(self)) {
+      val res = otherServers.diff(part)
+      otherServers --= res
+    } else {
+      otherServers --= part
+    }
   }
 }

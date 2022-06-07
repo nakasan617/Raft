@@ -284,9 +284,37 @@ object RecurringLeaderElection extends App {
   node2 ! Die
   if(leaderDied == true) {
     node3 ! Die
+  } else {
+    leader ! Die
   }
   Thread.sleep(10000)
-  println("Did it elect the new leader?")
+  println("Did it elect the new leader? It shouldn't.")
   println("system terminating")
   system.terminate()
+}
+
+object PartitionTest extends App {
+  val system = ActorSystem("Raft")
+  val node1 = system.actorOf(Props(classOf[Server], "follower"))
+  val node2 = system.actorOf(Props(classOf[Server], "follower"))
+  val node3 = system.actorOf(Props(classOf[Server], "follower"))
+  val node4 = system.actorOf(Props(classOf[Server], "follower"))
+  val node5 = system.actorOf(Props(classOf[Server], "follower"))
+
+  val nodes: HashSet[ActorRef] = new HashSet()
+  nodes += node1
+  nodes += node2
+  nodes += node3
+  nodes += node4
+  nodes += node5
+
+  nodes.foreach((node: ActorRef) => node ! AddServers(nodes))
+  nodes.foreach((node: ActorRef) => node ! Start)
+
+  val partition:HashSet[ActorRef] = new HashSet()
+  partition += node1
+  partition += node2
+
+  println("creating partition")
+  nodes.foreach((node: ActorRef) => node ! Partition(partition))
 }
