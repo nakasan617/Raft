@@ -315,6 +315,21 @@ object PartitionTest extends App {
   partition += node1
   partition += node2
 
-  println("creating partition")
+  Thread.sleep(2000)
+  println("creating partition for " + node1.path.toString + " and " + node2.path.toString)
   nodes.foreach((node: ActorRef) => node ! Partition(partition))
+  Thread.sleep(2000)
+
+  val client = system.actorOf(Props(classOf[Client], nodes))
+  println("Adding 2 logs to the system now")
+  client ! LogClient("I hope", node5)
+  client ! LogClient("This works", node4)
+
+  Thread.sleep(5000)
+  println("Unpartitioning")
+  nodes.foreach((node: ActorRef) => node ! Unpartition(nodes))
+
+  Thread.sleep(10000)
+  println("system terminating")
+  system.terminate()
 }
