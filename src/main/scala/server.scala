@@ -12,7 +12,6 @@ import java.util.concurrent.TimeoutException
 
 case object Start
 case object CheckSelf
-case object Vote
 case object Die
 case object Revive
 case object ShowLog
@@ -21,7 +20,8 @@ case object AskLeader
 case class HeartBeat(theirTerm: Int)
 case class AddServer(server: ActorRef)
 case class AddServers(servers: HashSet[ActorRef])
-case class VoteForMe(theirTerm: Int)
+case class VoteForMe(theirTerm: Int, theirRI: Int)
+case class Vote(theirTerm: Int)
 case class LeaderNotify(theirTerm: Int, newLeader: ActorRef)
 case class Log(ref: ActorRef, message: String, Id: Int)
 case class LogServer(message: String)
@@ -44,7 +44,6 @@ class Server(var role: String) extends Actor {
   var term: Int = 0
   var reelectionIndex: Int = 0
   var numVotes: Int = 0
-  var currTerm: Int = 0
   var logs: Array[Log] = Array()
   var preCommit: HashMap[Log, Int] = new HashMap()
   var logId: Int = 0
@@ -58,9 +57,9 @@ class Server(var role: String) extends Actor {
     case HeartBeat(theirTerm: Int) => if(alive) receiveHeartBeat(theirTerm)
     case AddServer(server: ActorRef) => if(alive) addServer(server)
     case AddServers(servers: HashSet[ActorRef]) => if(alive) addServers(servers)
-    case VoteForMe(theirTerm: Int) => if(alive) voteForMe(theirTerm, sender())
+    case VoteForMe(theirTerm: Int, theirRI: Int) => if(alive) voteForMe(theirTerm, sender(), theirRI: Int)
     case CheckSelf => if(alive) sender() ! "OK"
-    case Vote => if(alive) voteReceived()
+    case Vote(theirTerm: Int) => if(alive) voteReceived(theirTerm: Int)
     case LeaderNotify(theirTerm: Int, newLeader: ActorRef) => if(alive) leaderNotify(theirTerm: Int, newLeader)
     case Die => if(alive) die()
     case Revive => if(!alive) revive()
@@ -84,10 +83,14 @@ class Server(var role: String) extends Actor {
     cancellable = system.scheduler.scheduleWithFixedDelay(0.seconds, 200.millis) { () =>
       implicit val timeout = Timeout(5.seconds)
       otherServers.foreach((server: ActorRef) => server ! HeartBeat(term))
-      val future = ask(self, CheckSelf)
-      Await.result(future, 50.millis)
-      if(future == null) {
-        cancellable.cancel()
+      try {
+        val future = ask(self, CheckSelf)
+        Await.result(future, 50.millis)
+        if (future == null) {
+          cancellable.cancel()
+        }
+      } catch {
+        case te: TimeoutException => cancellable.cancel()
       }
     }
   }
@@ -219,7 +222,7 @@ class Server(var role: String) extends Actor {
   def startElection() = {
     //term += 1
     reelectionIndex += 1
-    println("did not receive the heartBeat, starting leader election: " + self.path.toString + ", now at term " + term)
+    println("did not receive the heartBeat, starting leader election: " + self.path.toString + ", now at term " + term + "at reelectionIndex: " + reelectionIndex)
     role = "candidate"
     numVotes = 1
 
@@ -230,47 +233,66 @@ class Server(var role: String) extends Actor {
       restartElection()
     }
 
-    otherServers.foreach((server: ActorRef) => server ! VoteForMe(term))
+    otherServers.foreach((server: ActorRef) => server ! VoteForMe(term, reelectionIndex))
   }
 
   private def restartElection(): Unit = {
     reelectionIndex += 1
-    println("could not elect the leader, will restart: " + self.path.toString + " at term " + term)
+    numVotes = 1
+    println("could not elect the leader, will restart: " + self.path.toString + " at term " + term + " at reelectionindex: " + reelectionIndex)
+    scheduleRestartElection()
+    otherServers.foreach((server: ActorRef) => server ! VoteForMe(term, reelectionIndex))
+  }
+
+  private def scheduleRestartElection(): Unit = {
     val time = r.nextInt(400) + 4000
     implicit val ec = system.dispatcher
     cancellable = system.scheduler.scheduleOnce(time.millis) {
       implicit val timeout = Timeout(5.seconds)
       restartElection()
     }
-    otherServers.foreach((server: ActorRef) => server ! VoteForMe(term))
   }
-
   /*
   This method is a response of the FOLLOWER (NOT leader) to either vote for the guy, or not vote for the guy
   if the follower is voting there must be a line candidate ! Vote
    */
-  def voteForMe(theirTerm: Int, candidate: ActorRef) = {
+  def voteForMe(theirTerm: Int, candidate: ActorRef, theirRI: Int) = {
+//    println(self.path.toString + ", role: " + role + ", term: " + term + ", RI: " + reelectionIndex)
     if(role == "follower") {
       if(theirTerm > term) {
         if(cancellable != null) {
           cancellable.cancel()
         }
+
 //        println("I am " + self.path.toString + ", voting for " + candidate.path.toString + " in term " + theirTerm)
-        candidate ! Vote
+        reelectionIndex = theirRI
+        scheduleRestartElection()
+        candidate ! Vote(theirTerm)
         term = theirTerm
       } else if(theirTerm == term) {
-        // you already voted for someone
+        if(reelectionIndex < theirRI) { // if they are ahead of us, vote
+//          println(self.path.toString + " theirRI is bigger with the same term, voting for " + candidate.path.toString)
+          reelectionIndex = theirRI
+          if(cancellable != null) {
+            cancellable.cancel()
+          }
+          scheduleRestartElection()
+          candidate ! Vote(term)
+        } else {
+          // if not, don't do anything
+        }
       } else {
         // term > theirTerm
         // you should not vote in this case
       }
     } else if (role == "leader") {
-      if(theirTerm > term) {
+      if(theirTerm > term) { // if they are ahead
         role = "follower"
         if(cancellable != null) {
           cancellable.cancel()
         }
-        candidate ! Vote
+        scheduleRestartElection()
+        candidate ! Vote(theirTerm)
         term = theirTerm
       } else if(theirTerm < term) {
         // this guy will eventually give out the heartBeat to check the term
@@ -280,12 +302,27 @@ class Server(var role: String) extends Actor {
     } else {
       assert(role == "candidate")
       if(theirTerm == term) {
-        // don't do anything, don't vote
+        if(reelectionIndex < theirRI) {
+          // if they are ahead, you should vote
+          reelectionIndex = theirRI
+          if(cancellable != null) {
+            cancellable.cancel()
+          }
+          scheduleRestartElection()
+          candidate ! Vote(term)
+        } else {
+          // don't vote in this case
+        }
       } else if (theirTerm > term) {
         // I need to follow them
         role = "follower"
         term = theirTerm
-        candidate ! Vote
+        reelectionIndex = theirRI
+        if(cancellable != null) {
+          cancellable.cancel()
+        }
+        scheduleRestartElection()
+        candidate ! Vote(theirTerm)
       } else {
         // they need to follow me
         assert(theirTerm < term)
@@ -298,44 +335,43 @@ class Server(var role: String) extends Actor {
   This methods is called when a vote is received form a follower, and when one gets the number of vote that is more than half the number of servers,
   it should notify all the followers that it became the leader and starts sending HeartBeats
    */
-  def voteReceived(): Unit = {
-    if(term > currTerm) {
-      numVotes += 1
-      val half: Int = otherServers.size / 2
-      if (numVotes > half) {
-        if(cancellable != null) {
-          cancellable.cancel()
-        }
-        println("leader elected, " + self.path.toString + " is the new leader at term " + term)
-        currTerm = term
-        otherServers.foreach((server: ActorRef) => {
-          implicit val timeout = Timeout(1.seconds)
-          try {
-            val future = ask(server, LeaderNotify(term, self)).mapTo[String]
-            Await.result(future, timeout.duration)
-            if (future == null || future.value == null) {
-              println("leader notify did not work")
-              system.terminate() // this is basically asserting
-            } else if (future.value.get.get == "No Good") {
-              println("there is a problem with the term")
-              system.terminate() // this is basically asserting for now
-            } else if (future.value.get.get == "OK") {
-//              println("OK was received")
-
-            } else {
-              println("some random messages received: " + future.value.get.get)
-            }
-          } catch {
-            case te: java.util.concurrent.TimeoutException => {
-              println("timeout exception caught when sending it to " + server.path.toString)
-            }
-          }
-        })
-        role = "leader"
-        leader = self
-        sendHeartBeats()
+  def voteReceived(theirTerm: Int): Unit = {
+    numVotes += 1
+    val half: Int = otherServers.size / 2
+    if (numVotes > half && term == theirTerm) {
+      if(cancellable != null) {
+        cancellable.cancel()
       }
+      term += 1
+      println("leader elected, " + self.path.toString + " is the new leader at term " + term)
+      reelectionIndex = 0
+      otherServers.foreach((server: ActorRef) => {
+        implicit val timeout = Timeout(1.seconds)
+        try {
+          val future = ask(server, LeaderNotify(term, self)).mapTo[String]
+          Await.result(future, timeout.duration)
+          if (future == null || future.value == null) {
+            println("leader notify did not work")
+            system.terminate() // this is basically asserting
+          } else if (future.value.get.get == "No Good") {
+            println("there is a problem with the term")
+            system.terminate() // this is basically asserting for now
+          } else if (future.value.get.get == "OK") {
+//             println("OK was received")
+          } else {
+            println("some random messages received: " + future.value.get.get)
+          }
+        } catch {
+          case te: java.util.concurrent.TimeoutException => {
+            println("timeout exception caught when sending it to " + server.path.toString)
+          }
+        }
+      })
+      role = "leader"
+      leader = self
+      sendHeartBeats()
     }
+
   }
 
   /*
@@ -344,6 +380,8 @@ class Server(var role: String) extends Actor {
    */
   def leaderNotify(theirTerm: Int, newLeader: ActorRef): Unit = {
     if(theirTerm >= term) {
+      reelectionIndex = 0
+      cancellable.cancel()
       sender() ! "OK"
       term = theirTerm
       role = "follower"

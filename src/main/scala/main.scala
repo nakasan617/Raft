@@ -104,7 +104,7 @@ object LeaderElectionTest extends App {
   nodes.foreach((node: ActorRef) => node ! AddServers(nodes))
   nodes.foreach((node: ActorRef) => node ! Start)
 
-  Thread.sleep(1000)
+  Thread.sleep(6000)
   println("Finding the leader of this term")
   var leader: ActorRef = node1
   try {
