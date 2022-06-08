@@ -241,7 +241,7 @@ object ReviveTest extends App {
 /*
 This is a test to see if the candidate will keep on holding the election if the more than half the nodes are dead.
  */
-object RecurringLeaderElection extends App {
+object RecurringLeaderElectionTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
   val node2 = system.actorOf(Props(classOf[Server], "follower"))
