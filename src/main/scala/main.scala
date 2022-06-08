@@ -293,6 +293,13 @@ object RecurringLeaderElection extends App {
   system.terminate()
 }
 
+/*
+This is a test that creates the partition between the two parties.
+This test made me realize how buggy my code was.
+At high level, it creates the set of nodes, creates a partition between {node1, node2} and {node3, node4, node5},
+commits some logs in {node3, node4, node5}, then it deletes the partition.
+It checks if the node1 and node5 has the same log before and after the partition.
+ */
 object PartitionTest extends App {
   val system = ActorSystem("Raft")
   val node1 = system.actorOf(Props(classOf[Server], "follower"))
@@ -325,11 +332,21 @@ object PartitionTest extends App {
   client ! LogClient("I hope", node5)
   client ! LogClient("This works", node4)
 
-  Thread.sleep(5000)
+  Thread.sleep(2000)
+  println("Let's see if the logs are different between two members of the different partition")
+  client ! AskLog(node1)
+  client ! AskLog(node5)
+
+  Thread.sleep(3000)
   println("Unpartitioning")
   nodes.foreach((node: ActorRef) => node ! Unpartition(nodes))
 
-  Thread.sleep(10000)
+  Thread.sleep(5000)
+  client ! AskLog(node1)
+  client ! AskLog(node5)
+
+  Thread.sleep(2000)
+  println("logs should be the same between the two nodes in each side of the partition")
   println("system terminating")
   system.terminate()
 }
