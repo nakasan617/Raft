@@ -288,7 +288,7 @@ class Server(var role: String) extends Actor {
         term = theirTerm
       } else if(theirTerm == term) {
         if(reelectionIndex < theirRI) { // if they are ahead of us, vote
-//          println(self.path.toString + " theirRI is bigger with the same term, voting for " + candidate.path.toString)
+          //println(self.path.toString + " theirRI is bigger with the same term, voting for " + candidate.path.toString)
           reelectionIndex = theirRI
           if(cancellable != null) {
             cancellable.cancel()
